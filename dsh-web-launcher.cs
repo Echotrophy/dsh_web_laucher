@@ -1,0 +1,823 @@
+// ============================================================================
+//  dsh-web-launcher.cs
+//  DeepSeek Harness Web 启动器（托盘小工具）
+//
+//  功能：
+//    1. 双击运行，无命令行窗口、无控制台驻留
+//    2. 若 127.0.0.1:3080 已被占用：
+//       - 占用者是 node/dsh 进程 → 自动"接管"，退出时可停止它
+//       - 占用者是非 node 进程 → 不接管（退出不会误杀）
+//    3. 否则以隐藏窗口方式启动 dsh web（node ...\@deepseek-ai\dsh\lib\bin.js web）
+//    4. 轮询端口，就绪后托盘气泡提示 + 自动打开默认浏览器
+//    5. 托盘图标常驻：黄色=启动中 / 绿色=运行中 / 红色=异常 / 灰色=已停止
+//       右键菜单：打开界面 / 重新启动服务 / 打开日志文件 / 退出（停止服务）
+//    6. 单实例保护（重复双击只打开浏览器）；后台定时巡检，服务挂掉托盘变红
+//    7. 退出/重启时：先杀自己拉起的进程树，再按端口清扫残留的 node 监听进程
+//       （即使进程关系失联，也能停掉真正占用端口的 dsh 服务）
+//
+//  编译（Windows 自带 .NET Framework 的 csc.exe，无需安装任何东西）：
+//      build.cmd
+//
+//  配置文件：同目录 config.json（可自定义端口、是否自动开浏览器、超时、路径等）
+//  日志文件：同目录 dsh-web.log
+//
+//  目标框架：.NET Framework 4.x（C# 5 语法，兼容旧版 csc）
+// ============================================================================
+
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Windows.Forms;
+using System.Web.Script.Serialization;
+using Microsoft.Win32;
+
+namespace DSHWebLauncher
+{
+    // ------------------------------------------------------------------ 程序入口
+    internal static class Program
+    {
+        private const string MutexName = "DSHWebLauncher_SingleInstance";
+
+        [STAThread]
+        private static void Main()
+        {
+            bool createdNew;
+            using (Mutex mutex = new Mutex(true, MutexName, out createdNew))
+            {
+                if (!createdNew)
+                {
+                    // 已有实例在运行：按配置决定是否打开浏览器，然后本实例退出
+                    Config cfg = Config.Load();
+                    Log.Init(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, cfg.LogFile));
+                    Log.Write("检测到已有实例，本实例退出");
+                    if (cfg.AutoOpenBrowser) OpenBrowser(cfg.Url);
+                    return;
+                }
+
+                try
+                {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    Application.Run(new LauncherForm());
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("程序异常: " + ex);
+                }
+            }
+        }
+
+        public static void OpenBrowser(string url)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                Log.Write("已在默认浏览器打开: " + url);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("打开浏览器失败: " + ex.Message);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ 配置
+    internal sealed class Config
+    {
+        public string Host = "127.0.0.1";
+        public int Port = 3080;
+        public bool AutoOpenBrowser = true;
+        public int StartTimeoutSeconds = 120;
+        public int PollIntervalMs = 500;
+        public string NodePath = "";
+        public string DshBinPath = "";
+        public string DshHome = "";
+        public string LogFile = "dsh-web.log";
+        public string[] ExtraArgs = new string[0];
+
+        public string Url { get { return "http://" + Host + ":" + Port; } }
+
+        public static Config Load()
+        {
+            Config c = new Config();
+            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            if (!File.Exists(path)) return c;
+
+            try
+            {
+                string json = File.ReadAllText(path);
+                var ser = new JavaScriptSerializer();
+                var map = ser.Deserialize<Dictionary<string, object>>(json);
+                if (map == null) return c;
+
+                object v;
+                if (map.TryGetValue("host", out v) && v != null && Convert.ToString(v).Length > 0) c.Host = Convert.ToString(v);
+                if (map.TryGetValue("port", out v) && v != null) c.Port = Convert.ToInt32(v);
+                if (map.TryGetValue("autoOpenBrowser", out v) && v != null) c.AutoOpenBrowser = Convert.ToBoolean(v);
+                if (map.TryGetValue("startTimeoutSeconds", out v) && v != null) c.StartTimeoutSeconds = Convert.ToInt32(v);
+                if (map.TryGetValue("pollIntervalMs", out v) && v != null) c.PollIntervalMs = Convert.ToInt32(v);
+                if (map.TryGetValue("nodePath", out v) && v != null && Convert.ToString(v).Length > 0) c.NodePath = Convert.ToString(v);
+                if (map.TryGetValue("dshBinPath", out v) && v != null && Convert.ToString(v).Length > 0) c.DshBinPath = Convert.ToString(v);
+                if (map.TryGetValue("dshHome", out v) && v != null && Convert.ToString(v).Length > 0) c.DshHome = Convert.ToString(v);
+                if (map.TryGetValue("logFile", out v) && v != null && Convert.ToString(v).Length > 0) c.LogFile = Convert.ToString(v);
+                if (map.TryGetValue("extraArgs", out v) && v != null)
+                {
+                    var list = new List<string>();
+                    var al = v as ArrayList;
+                    if (al != null)
+                    {
+                        foreach (object o in al) if (o != null) list.Add(Convert.ToString(o));
+                    }
+                    else if (v is object[])
+                    {
+                        foreach (object o in (object[])v) if (o != null) list.Add(Convert.ToString(o));
+                    }
+                    c.ExtraArgs = list.ToArray();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("读取 config.json 失败，使用默认配置: " + ex.Message);
+            }
+            return c;
+        }
+
+        /// <summary>解析 node.exe 路径：配置 > PATH > 常见安装位置</summary>
+        public string ResolveNodePath()
+        {
+            if (NodePath.Length > 0 && File.Exists(NodePath)) return NodePath;
+
+            string pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (string dir in pathEnv.Split(';'))
+            {
+                if (dir.Length == 0) continue;
+                string cand = Path.Combine(dir.Trim('"'), "node.exe");
+                if (File.Exists(cand)) return cand;
+            }
+
+            string[] fallbacks = {
+                @"C:\Program Files\nodejs\node.exe",
+                @"C:\Program Files (x86)\nodejs\node.exe",
+                @"%ProgramFiles%\nodejs\node.exe",
+                @"%LOCALAPPDATA%\Programs\nodejs\node.exe"
+            };
+            foreach (string f in fallbacks)
+            {
+                string expanded = Environment.ExpandEnvironmentVariables(f);
+                if (File.Exists(expanded)) return expanded;
+            }
+            return "node";
+        }
+
+        /// <summary>解析 dsh 的 bin.js：配置 > 常见 npm 全局安装位置</summary>
+        public string ResolveDshBin()
+        {
+            if (DshBinPath.Length > 0 && File.Exists(DshBinPath)) return DshBinPath;
+
+            string[] candidates = {
+                @"%APPDATA%\npm\node_modules\@deepseek-ai\dsh\lib\bin.js",
+                @"%ProgramFiles%\nodejs\node_modules\@deepseek-ai\dsh\lib\bin.js",
+                @"%ProgramFiles%\nodejs\node_global\node_modules\@deepseek-ai\dsh\lib\bin.js",
+                @"%LOCALAPPDATA%\Programs\nodejs\node_modules\@deepseek-ai\dsh\lib\bin.js"
+            };
+            foreach (string f in candidates)
+            {
+                string expanded = Environment.ExpandEnvironmentVariables(f);
+                if (File.Exists(expanded)) return expanded;
+            }
+            return DshBinPath; // 找不到时原样返回，让日志报错更明确
+        }
+
+        /// <summary>解析 DSH_HOME：配置 > 环境变量 > %USERPROFILE%\.dsh</summary>
+        public string ResolveDshHome()
+        {
+            if (DshHome.Length > 0) return DshHome;
+            string env = Environment.GetEnvironmentVariable("DSH_HOME");
+            if (!string.IsNullOrEmpty(env)) return env;
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
+        }
+    }
+
+    // ------------------------------------------------------------------ 日志
+    internal static class Log
+    {
+        private static readonly object Lock = new object();
+        private static string _path;
+
+        public static void Init(string file)
+        {
+            lock (Lock)
+            {
+                _path = file;
+                try
+                {
+                    // UTF-8 带 BOM：记事本/PowerShell 都能正确显示中文
+                    File.AppendAllText(_path, "===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 启动器启动 =====\r\n", new UTF8Encoding(true));
+                }
+                catch { }
+            }
+        }
+
+        public static void Write(string msg)
+        {
+            lock (Lock)
+            {
+                if (_path == null) return;
+                try
+                {
+                    File.AppendAllText(_path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + msg + "\r\n", new UTF8Encoding(true));
+                }
+                catch { }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ 主窗体（不可见，承载托盘图标与全部逻辑）
+    internal sealed class LauncherForm : Form
+    {
+        private Config _cfg;
+        private NotifyIcon _tray;
+        private ToolStripMenuItem _miExit;
+        private System.Windows.Forms.Timer _pollTimer;
+        private System.Windows.Forms.Timer _healthTimer;
+        private Process _proc;
+        private bool _ownProcess;
+        private bool _ready;
+        private bool _starting;
+        private bool _exiting;
+        private DateTime _startedAt;
+        private Icon _iconStart, _iconReady, _iconError, _iconStopped;
+
+        public LauncherForm()
+        {
+            // 隐藏窗体：无边框、不进任务栏、完全不显示
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.ShowInTaskbar = false;
+            this.WindowState = FormWindowState.Minimized;
+            this.Opacity = 0;
+            this.StartPosition = FormStartPosition.Manual;
+            this.Location = new Point(-32000, -32000);
+            // 系统注销/关机时先清理，避免遗留孤儿 dsh 进程
+            SystemEvents.SessionEnding += OnSessionEnding;
+
+            _cfg = Config.Load();
+            Log.Init(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _cfg.LogFile));
+            Log.Write("配置: url=" + _cfg.Url + " node=" + _cfg.ResolveNodePath() + " dshBin=" + _cfg.ResolveDshBin() + " dshHome=" + _cfg.ResolveDshHome());
+
+            BuildTray();
+            Start();
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        private void OnSessionEnding(object sender, SessionEndingEventArgs e)
+        {
+            Cleanup();
+        }
+
+        // ------------------------------------------------------------ 托盘
+        private void BuildTray()
+        {
+            _iconStart = MakeCircleIcon(Color.Orange, Color.FromArgb(120, 80, 0));
+            _iconReady = MakeCircleIcon(Color.LimeGreen, Color.FromArgb(0, 100, 0));
+            _iconError = MakeCircleIcon(Color.Red, Color.FromArgb(120, 0, 0));
+            _iconStopped = MakeCircleIcon(Color.Gray, Color.FromArgb(60, 60, 60));
+
+            var menu = new ContextMenuStrip();
+            var miOpen = new ToolStripMenuItem("打开界面 (" + _cfg.Url + ")");
+            miOpen.Click += delegate { Program.OpenBrowser(_cfg.Url); };
+            var miRestart = new ToolStripMenuItem("重新启动服务");
+            miRestart.Click += delegate { RestartServer(); };
+            var miLog = new ToolStripMenuItem("打开日志文件");
+            miLog.Click += delegate { TryOpenLog(); };
+            _miExit = new ToolStripMenuItem("退出（停止服务）");
+            _miExit.Click += delegate { ExitApplication(); };
+            menu.Items.Add(miOpen);
+            menu.Items.Add(miRestart);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(miLog);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(_miExit);
+
+            _tray = new NotifyIcon();
+            _tray.Icon = _iconStart;
+            _tray.Text = "DSH Web：启动中…";
+            _tray.Visible = true;
+            _tray.ContextMenuStrip = menu;
+            _tray.DoubleClick += delegate { Program.OpenBrowser(_cfg.Url); };
+
+            UpdateExitMenuText();
+        }
+
+        private void SetTrayState(int state) // 0=启动中 1=运行中 2=已停止 3=异常
+        {
+            try
+            {
+                switch (state)
+                {
+                    case 1: _tray.Icon = _iconReady; _tray.Text = "DSH Web：运行中 " + _cfg.Url; break;
+                    case 2: _tray.Icon = _iconStopped; _tray.Text = "DSH Web：已停止"; break;
+                    case 3: _tray.Icon = _iconError; _tray.Text = "DSH Web：异常，请查看日志"; break;
+                    default: _tray.Icon = _iconStart; _tray.Text = "DSH Web：启动中…"; break;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>根据是否持有 dsh 进程，更新退出菜单文案</summary>
+        private void UpdateExitMenuText()
+        {
+            if (_miExit != null)
+                _miExit.Text = _ownProcess ? "退出（停止服务）" : "退出（未接管外部服务）";
+        }
+
+        // ------------------------------------------------------------ 启动流程
+        private void Start()
+        {
+            if (PortOpen(_cfg.Host, _cfg.Port))
+            {
+                // 端口已被占用：若占用者是 node/dsh 进程则接管，退出时可停止它
+                Process adopted = AdoptPortListener();
+                if (adopted != null)
+                {
+                    Log.Write("端口 " + _cfg.Port + " 已有 node/dsh 进程 PID=" + adopted.Id + "，已接管，退出时可停止");
+                    _proc = adopted;
+                    _ownProcess = true;
+                }
+                else
+                {
+                    Log.Write("端口 " + _cfg.Port + " 已被占用，但不是可识别的 node/dsh 进程，未接管（退出不会停止它）");
+                    _ownProcess = false;
+                }
+                _ready = true;
+                _starting = false;
+                SetTrayState(1);
+                UpdateExitMenuText();
+                if (_cfg.AutoOpenBrowser) Program.OpenBrowser(_cfg.Url);
+                StartHealthTimer();
+                return;
+            }
+
+            _starting = true;
+            _ready = false;
+            _startedAt = DateTime.Now;
+            if (!StartDshProcess())
+            {
+                _starting = false;
+                SetTrayState(3);
+                _tray.ShowBalloonTip(6000, "DSH Web 启动器", "无法启动 dsh 进程，请查看日志文件", ToolTipIcon.Error);
+                return;
+            }
+
+            _pollTimer = new System.Windows.Forms.Timer();
+            _pollTimer.Interval = Math.Max(200, _cfg.PollIntervalMs);
+            _pollTimer.Tick += PollTick;
+            _pollTimer.Start();
+            SetTrayState(0);
+            UpdateExitMenuText();
+            Log.Write("已启动 dsh 进程 PID=" + _proc.Id + "，等待 " + _cfg.Url + " 就绪…");
+        }
+
+        private bool StartDshProcess()
+        {
+            try
+            {
+                string node = _cfg.ResolveNodePath();
+                string bin = _cfg.ResolveDshBin();
+                if (!File.Exists(bin))
+                {
+                    Log.Write("找不到 dsh 入口文件: " + bin + "（请在 config.json 中配置 dshBinPath）");
+                    return false;
+                }
+
+                StringBuilder args = new StringBuilder();
+                args.Append(Quote(bin)).Append(" web");
+                if (_cfg.Port != 3080) args.Append(" --port ").Append(_cfg.Port);
+                if (_cfg.Host != "127.0.0.1") args.Append(" --host ").Append(_cfg.Host);
+                foreach (string a in _cfg.ExtraArgs) args.Append(" ").Append(Quote(a));
+
+                var psi = new ProcessStartInfo();
+                psi.FileName = node;
+                psi.Arguments = args.ToString();
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                // 工作目录用 dshHome（始终存在），避免启动器目录被移动/删除后 dsh 启动报 chdir 错误
+                psi.WorkingDirectory = _cfg.ResolveDshHome();
+                psi.EnvironmentVariables["DSH_HOME"] = _cfg.ResolveDshHome();
+
+                // 每个进程用独立回调，回调内校验引用，避免"旧进程的 Exited 事件误操作新进程"
+                Process proc = new Process();
+                proc.StartInfo = psi;
+                proc.EnableRaisingEvents = true;
+                proc.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Log.Write("[dsh] " + e.Data); };
+                proc.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Log.Write("[dsh!] " + e.Data); };
+                proc.Exited += delegate { OnDshExited(proc); };
+
+                if (!proc.Start()) { Log.Write("Process.Start 返回 false"); return false; }
+                _proc = proc;
+                _ownProcess = true;
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("启动 dsh 进程失败: " + ex);
+                return false;
+            }
+        }
+
+        private void PollTick(object sender, EventArgs e)
+        {
+            if (_exiting) return;
+            if (PortOpen(_cfg.Host, _cfg.Port)) { MarkReady(); return; }
+
+            if (_proc != null && !ProcAlive(_proc))
+            {
+                StopPollTimer();
+                _starting = false;
+                SetTrayState(3);
+                _tray.ShowBalloonTip(6000, "DSH Web 启动器", "dsh 进程启动后立即退出，请查看日志", ToolTipIcon.Error);
+                return;
+            }
+
+            double elapsed = (DateTime.Now - _startedAt).TotalSeconds;
+            if (elapsed > _cfg.StartTimeoutSeconds)
+            {
+                StopPollTimer();
+                _starting = false;
+                SetTrayState(3);
+                _tray.ShowBalloonTip(8000, "DSH Web 启动器", "等待 " + _cfg.Url + " 就绪超时（" + _cfg.StartTimeoutSeconds + " 秒），请查看日志", ToolTipIcon.Error);
+                return;
+            }
+
+            _tray.Text = "DSH Web：启动中… " + (int)elapsed + "s";
+        }
+
+        private void MarkReady()
+        {
+            if (_ready || _exiting) return;
+            _ready = true;
+            _starting = false;
+            StopPollTimer();
+            SetTrayState(1);
+            Log.Write("服务就绪: " + _cfg.Url);
+            _tray.ShowBalloonTip(4000, "DSH Web 启动器", "DeepSeek Harness 已就绪：" + _cfg.Url, ToolTipIcon.Info);
+            if (_cfg.AutoOpenBrowser) Program.OpenBrowser(_cfg.Url);
+            StartHealthTimer();
+        }
+
+        // ------------------------------------------------------------ 巡检
+        private void StartHealthTimer()
+        {
+            if (_healthTimer != null) return;
+            _healthTimer = new System.Windows.Forms.Timer();
+            _healthTimer.Interval = 3000;
+            _healthTimer.Tick += HealthTick;
+            _healthTimer.Start();
+        }
+
+        private void HealthTick(object sender, EventArgs e)
+        {
+            if (_exiting) return;
+            bool open = PortOpen(_cfg.Host, _cfg.Port);
+            if (open)
+            {
+                if (!_ready) MarkReady();
+                return;
+            }
+
+            if (ProcAlive(_proc))
+            {
+                SetTrayState(3); // 进程在但端口不通：异常
+            }
+            else
+            {
+                SetTrayState(2); // 进程没了（或非本进程托管）：已停止
+            }
+        }
+
+        // ------------------------------------------------------------ 进程退出回调
+        private void OnDshExited(Process proc)
+        {
+            if (_exiting) return;
+            // 过期回调防护：重启/停止后旧进程的 Exited 事件仍会到达，
+            // 只处理"当前正在托管"的那个进程，避免误改新进程的所有权状态
+            if (!ReferenceEquals(proc, _proc)) return;
+            try
+            {
+                this.BeginInvoke((MethodInvoker)delegate
+                {
+                    if (_exiting || this.IsDisposed) return;
+                    if (!ReferenceEquals(proc, _proc)) return;
+                    int code = -1;
+                    try { code = proc.ExitCode; } catch { }
+                    Log.Write("dsh 进程已退出 PID=" + proc.Id + " code=" + code);
+                    _proc = null;
+                    _ownProcess = false;
+                    _ready = false;
+                    StopPollTimer();
+                    UpdateExitMenuText();
+                    if (_starting)
+                    {
+                        _starting = false;
+                        SetTrayState(3);
+                        _tray.ShowBalloonTip(6000, "DSH Web 启动器", "dsh 启动失败或立即退出（code " + code + "），请查看日志", ToolTipIcon.Error);
+                    }
+                    else
+                    {
+                        SetTrayState(2);
+                        _tray.ShowBalloonTip(5000, "DSH Web 启动器", "dsh 服务已停止", ToolTipIcon.Warning);
+                    }
+                });
+            }
+            catch { }
+        }
+
+        // ------------------------------------------------------------ 重启 / 退出
+        private void RestartServer()
+        {
+            Log.Write("手动重启服务…");
+            StopTimers();
+            KillOwnProcess();
+            _ready = false;
+            _starting = false;
+            Start();
+        }
+
+        private void ExitApplication()
+        {
+            if (_exiting) return;
+            _exiting = true;
+            Log.Write("用户选择退出");
+            Cleanup();
+            this.Close();
+            Application.Exit();
+        }
+
+        private void Cleanup()
+        {
+            try
+            {
+                StopTimers();
+                KillOwnProcess();
+                if (_tray != null)
+                {
+                    _tray.Visible = false;
+                    _tray.Dispose();
+                    _tray = null;
+                }
+            }
+            catch { }
+        }
+
+        private void StopTimers()
+        {
+            StopPollTimer();
+            if (_healthTimer != null) { try { _healthTimer.Stop(); } catch { } _healthTimer = null; }
+        }
+
+        private void StopPollTimer()
+        {
+            if (_pollTimer != null) { try { _pollTimer.Stop(); } catch { } _pollTimer = null; }
+        }
+
+        private void KillOwnProcess()
+        {
+            Process target = _proc;
+            bool owned = _ownProcess;
+            // 先摘除引用，防止被杀的进程触发 Exited 回调影响后续状态
+            _proc = null;
+            _ownProcess = false;
+
+            if (target != null && owned)
+            {
+                bool alive = true;
+                try { alive = !target.HasExited; } catch { alive = true; } // 查询失败时按存活处理，尝试强杀
+                if (alive)
+                {
+                    Log.Write("停止 dsh 进程树 PID=" + target.Id);
+                    RunTaskKill(target.Id);
+                    try { target.WaitForExit(8000); } catch { }
+                }
+            }
+
+            // 端口清扫：即使进程关系失联（孤儿进程/接管的外部实例），
+            // 也能停掉真正占用该端口的 node/dsh 服务
+            KillPortListeners();
+        }
+
+        private static void RunTaskKill(int pid)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("taskkill", "/PID " + pid + " /T /F");
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                using (Process p = Process.Start(psi))
+                {
+                    if (p != null) p.WaitForExit(8000);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("taskkill " + pid + " 失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>杀掉占用配置端口的 node 进程（非 node 进程跳过，避免误杀）</summary>
+        private void KillPortListeners()
+        {
+            List<int> pids = GetPortListenerPids(_cfg.Host, _cfg.Port);
+            foreach (int pid in pids)
+            {
+                if (_proc != null && pid == _proc.Id) continue;
+                if (pid == Process.GetCurrentProcess().Id) continue;
+                try
+                {
+                    using (Process p = Process.GetProcessById(pid))
+                    {
+                        if (p == null) continue;
+                        if (!IsNodeProcess(p))
+                        {
+                            Log.Write("端口 " + _cfg.Port + " 由非 node 进程 PID=" + pid + " 占用，跳过（避免误杀）");
+                            continue;
+                        }
+                        Log.Write("停止端口 " + _cfg.Port + " 上的 node 进程 PID=" + pid);
+                        RunTaskKill(pid);
+                    }
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// 接管端口上已有的 node/dsh 进程，使"退出"能停止它。
+        /// 注意：不为被接管进程附加 Exited 事件（EnableRaisingEvents 对已存在进程
+        /// 可能因权限失败），存活状态交给端口巡检判断，退出时直接按 PID 停止。
+        /// </summary>
+        private Process AdoptPortListener()
+        {
+            List<int> pids = GetPortListenerPids(_cfg.Host, _cfg.Port);
+            foreach (int pid in pids)
+            {
+                if (pid == Process.GetCurrentProcess().Id) continue;
+                try
+                {
+                    Process p = Process.GetProcessById(pid);
+                    if (p != null && IsNodeProcess(p)) return p;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static bool IsNodeProcess(Process p)
+        {
+            try
+            {
+                if (string.Equals(p.ProcessName, "node", StringComparison.OrdinalIgnoreCase)) return true;
+                string path = p.MainModule != null ? p.MainModule.FileName : "";
+                return path.Length > 0 && string.Equals(Path.GetFileName(path), "node.exe", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>安全判断进程是否存活；查询失败时假定存活（端口巡检才是最终依据）</summary>
+        private static bool ProcAlive(Process p)
+        {
+            try { return p != null && !p.HasExited; }
+            catch { return true; }
+        }
+
+        private void TryOpenLog()
+        {
+            string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _cfg.LogFile);
+            try
+            {
+                Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Write("打开日志失败: " + ex.Message);
+            }
+        }
+
+        // ------------------------------------------------------------ 工具方法
+        private static bool PortOpen(string host, int port)
+        {
+            var client = new TcpClient();
+            try
+            {
+                IAsyncResult ar = client.BeginConnect(host, port, null, null);
+                if (!ar.AsyncWaitHandle.WaitOne(800)) return false;
+                client.EndConnect(ar);
+                return true;
+            }
+            catch { return false; }
+            finally { try { client.Close(); } catch { } }
+        }
+
+        /// <summary>列出监听指定 host:port 的进程 PID（GetExtendedTcpTable，IPv4）</summary>
+        private static List<int> GetPortListenerPids(string host, int port)
+        {
+            var result = new List<int>();
+            try
+            {
+                uint addr = BitConverter.ToUInt32(IPAddress.Parse(host).GetAddressBytes(), 0);
+                int size = 0;
+                uint rc = GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+                if (rc != 0 && rc != ERROR_INSUFFICIENT_BUFFER) return result;
+
+                IntPtr buf = Marshal.AllocHGlobal(size);
+                try
+                {
+                    rc = GetExtendedTcpTable(buf, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+                    if (rc != 0) return result;
+
+                    int count = Marshal.ReadInt32(buf);
+                    IntPtr row = IntPtr.Add(buf, Marshal.SizeOf(typeof(int)));
+                    int rowSize = Marshal.SizeOf(typeof(MIB_TCPROW_OWNER_PID));
+                    for (int i = 0; i < count; i++)
+                    {
+                        MIB_TCPROW_OWNER_PID r = (MIB_TCPROW_OWNER_PID)Marshal.PtrToStructure(row, typeof(MIB_TCPROW_OWNER_PID));
+                        row = IntPtr.Add(row, rowSize);
+                        if (r.state == MIB_TCP_STATE_LISTEN && r.localAddr == addr)
+                        {
+                            ushort localPort = (ushort)IPAddress.NetworkToHostOrder((short)r.localPort);
+                            if (localPort == (ushort)port && r.owningPid > 0 && !result.Contains(r.owningPid))
+                                result.Add(r.owningPid);
+                        }
+                    }
+                }
+                finally { Marshal.FreeHGlobal(buf); }
+            }
+            catch { }
+            return result;
+        }
+
+        private const int AF_INET = 2;
+        private const int TCP_TABLE_OWNER_PID_ALL = 5;
+        private const uint ERROR_INSUFFICIENT_BUFFER = 122;
+        private const uint MIB_TCP_STATE_LISTEN = 2;
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int TableClass, int Reserved);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MIB_TCPROW_OWNER_PID
+        {
+            public uint state;        // 0
+            public uint localAddr;    // 4
+            public ushort localPort;  // 8
+            public uint remoteAddr;   // 12
+            public ushort remotePort; // 16
+            public int owningPid;     // 20
+        }
+
+        private static string Quote(string s)
+        {
+            if (s.IndexOf(' ') < 0 && s.IndexOf('"') < 0) return s;
+            return "\"" + s.Replace("\"", "\\\"") + "\"";
+        }
+
+        private static Icon MakeCircleIcon(Color main, Color ring)
+        {
+            Bitmap bmp = new Bitmap(16, 16);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                using (SolidBrush b = new SolidBrush(main)) g.FillEllipse(b, 2, 2, 12, 12);
+                using (Pen p = new Pen(ring, 1f)) g.DrawEllipse(p, 2, 2, 12, 12);
+                using (SolidBrush w = new SolidBrush(Color.FromArgb(160, 255, 255, 255))) g.FillEllipse(w, 6, 5, 4, 4);
+            }
+            IntPtr h = bmp.GetHicon();
+            Icon icon = (Icon)Icon.FromHandle(h).Clone();
+            DestroyIcon(h);
+            bmp.Dispose();
+            return icon;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            try { SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
+            Cleanup();
+            base.OnFormClosed(e);
+        }
+    }
+}

@@ -1,0 +1,8 @@
+# 编译产物（用 build.cmd 生成，可通过 GitHub Releases 发布）
+dsh-web-launcher.exe
+
+# 运行日志（自动生成）
+dsh-web.log
+
+# 本机个人配置（含本机绝对路径，勿提交；仓库提供 config.example.json 模板）
+config.json
