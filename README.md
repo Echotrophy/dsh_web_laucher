@@ -54,7 +54,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 
 ## 配置文件
 
-程序读取 exe 同目录下的 `config.json`（不强制存在，缺省时使用默认值并自动探测路径）。仓库不提交个人 `config.json`，提供了模板 `config.example.json`，复制为 `config.json` 后按需修改即可。
+程序读取 **exe 同目录**下的 `config.json`（不强制存在，缺省时使用默认值并自动探测路径）。**仅下载 exe 使用的用户**：从仓库或 Release 附件获取 `config.example.json` 模板，放到 exe 同目录并改名为 `config.json` 即可；也可以手动新建，只需写入想修改的字段，未填字段自动用默认值。仓库不提交个人 `config.json`。
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
