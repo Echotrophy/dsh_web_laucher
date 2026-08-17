@@ -47,7 +47,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 
 - **打开界面** — 在默认浏览器打开 `http://127.0.0.1:3080`
 - **重新启动服务** — 杀掉当前 dsh 进程并重新拉起（用于卡死/异常恢复）
-- **打开日志文件** — 查看 `dsh-web.log`（dsh 的 stdout/stderr 也会写入该文件，便于排障）
+- **打开日志文件** — 查看 `dsh-web.log`（默认在 `%LOCALAPPDATA%\dsh-web-launcher\`，dsh 的 stdout/stderr 也会写入该文件，便于排障）
 - **退出（停止服务）** — 结束 dsh 进程树并退出工具
 
 双击托盘图标 = 打开界面。
@@ -66,7 +66,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 | `nodePath` | 自动探测 | 启动 dsh 使用的 node.exe 路径（留空自动查找：PATH → 常见安装位置） |
 | `dshBinPath` | 自动探测 | dsh 入口 bin.js 路径（留空自动查找常见 npm 全局安装位置） |
 | `dshHome` | 环境变量或 `~/.dsh` | DSH_HOME，会传给 dsh 进程 |
-| `logFile` | `dsh-web.log` | 日志文件名（相对 exe 目录） |
+| `logFile` | `dsh-web.log` | 日志文件名（默认存放于 `%LOCALAPPDATA%\dsh-web-launcher\`；填含路径的值则按相对/绝对路径解析） |
 | `extraArgs` | `[]` | 附加给 `dsh web` 的命令行参数，如 `["--patch", "extra.yml"]` |
 
 修改配置后，先退出托盘中的旧实例，再重新双击 exe 生效。
@@ -95,7 +95,7 @@ build.cmd
 | 文件 | 说明 |
 |---|---|
 | `dsh-web-launcher.exe` | 编译产物，由 `build.cmd` 生成 |
-| `dsh-web.log` | 运行日志，自动生成 |
+| `dsh-web.log` | 运行日志，自动生成（位于 `%LOCALAPPDATA%\dsh-web-launcher\`） |
 | `config.json` | 本机个人配置（含本机绝对路径） |
 
 ## 常见问题

@@ -19,7 +19,7 @@
 //      build.cmd
 //
 //  配置文件：同目录 config.json（可自定义端口、是否自动开浏览器、超时、路径等）
-//  日志文件：同目录 dsh-web.log
+//  日志文件：默认 %LOCALAPPDATA%\dsh-web-launcher\dsh-web.log（config.json 的 logFile 可自定义）
 //
 //  目标框架：.NET Framework 4.x（C# 5 语法，兼容旧版 csc）
 // ============================================================================
@@ -57,7 +57,7 @@ namespace DSHWebLauncher
                 {
                     // 已有实例在运行：按配置决定是否打开浏览器，然后本实例退出
                     Config cfg = Config.Load();
-                    Log.Init(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, cfg.LogFile));
+                    Log.Init(cfg.ResolveLogPath());
                     Log.Write("检测到已有实例，本实例退出");
                     if (cfg.AutoOpenBrowser) OpenBrowser(cfg.Url);
                     return;
@@ -249,6 +249,24 @@ namespace DSHWebLauncher
             if (!string.IsNullOrEmpty(env)) return env;
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
         }
+
+        /// <summary>解析日志文件路径：config 中为含路径的值则按相对/绝对路径解析；否则放入 %LOCALAPPDATA%\dsh-web-launcher\，避免污染 exe 所在目录（如桌面）</summary>
+        public string ResolveLogPath()
+        {
+            if (LogFile.IndexOf('\\') >= 0 || LogFile.IndexOf('/') >= 0)
+            {
+                return Path.IsPathRooted(LogFile)
+                    ? LogFile
+                    : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, LogFile);
+            }
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string dir;
+            if (string.IsNullOrEmpty(local)) dir = AppDomain.CurrentDomain.BaseDirectory;
+            else dir = Path.Combine(local, "dsh-web-launcher");
+            try { Directory.CreateDirectory(dir); }
+            catch { dir = AppDomain.CurrentDomain.BaseDirectory; }
+            return Path.Combine(dir, LogFile);
+        }
     }
 
     // ------------------------------------------------------------------ 日志
@@ -314,7 +332,7 @@ namespace DSHWebLauncher
             SystemEvents.SessionEnding += OnSessionEnding;
 
             _cfg = Config.Load();
-            Log.Init(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _cfg.LogFile));
+            Log.Init(_cfg.ResolveLogPath());
             Log.Write("配置: url=" + _cfg.Url + " node=" + _cfg.ResolveNodePath() + " dshBin=" + _cfg.ResolveDshBin() + " dshHome=" + _cfg.ResolveDshHome());
 
             BuildTray();
@@ -747,7 +765,7 @@ namespace DSHWebLauncher
 
         private void TryOpenLog()
         {
-            string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _cfg.LogFile);
+            string logPath = _cfg.ResolveLogPath();
             try
             {
                 Process.Start(new ProcessStartInfo(logPath) { UseShellExecute = true });
