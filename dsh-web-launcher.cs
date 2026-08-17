@@ -178,11 +178,34 @@ namespace DSHWebLauncher
             return "node";
         }
 
-        /// <summary>解析 dsh 的 bin.js：配置 > 常见 npm 全局安装位置</summary>
+        /// <summary>解析 dsh 的 bin.js：配置 > 自动探测（node 目录推导 / npm root -g / 常见位置）</summary>
         public string ResolveDshBin()
         {
             if (DshBinPath.Length > 0 && File.Exists(DshBinPath)) return DshBinPath;
 
+            // 1) 由 node.exe 所在目录推导 npm 全局目录（自定义安装常见形态：<node目录>\node_global\node_modules）
+            string nodeDir = Path.GetDirectoryName(ResolveNodePath());
+            if (!string.IsNullOrEmpty(nodeDir))
+            {
+                string cand = Path.Combine(nodeDir, "node_global", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+                if (File.Exists(cand)) return cand;
+                cand = Path.Combine(nodeDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+                if (File.Exists(cand)) return cand;
+            }
+
+            // 2) 通过 `npm root -g` 动态查询全局模块根目录（兼容任意 npm 全局路径配置）
+            try
+            {
+                string npmRoot = RunNpmRoot();
+                if (!string.IsNullOrEmpty(npmRoot))
+                {
+                    string cand = Path.Combine(npmRoot, "@deepseek-ai", "dsh", "lib", "bin.js");
+                    if (File.Exists(cand)) return cand;
+                }
+            }
+            catch { }
+
+            // 3) 常见默认位置兜底
             string[] candidates = {
                 @"%APPDATA%\npm\node_modules\@deepseek-ai\dsh\lib\bin.js",
                 @"%ProgramFiles%\nodejs\node_modules\@deepseek-ai\dsh\lib\bin.js",
@@ -195,6 +218,27 @@ namespace DSHWebLauncher
                 if (File.Exists(expanded)) return expanded;
             }
             return DshBinPath; // 找不到时原样返回，让日志报错更明确
+        }
+
+        /// <summary>执行 `npm root -g` 获取全局模块根目录（失败返回 null）</summary>
+        private static string RunNpmRoot()
+        {
+            try
+            {
+                // 经 cmd.exe 调用：CreateProcess 无法直接启动 npm.cmd（.cmd shim），且需按 PATHEXT 解析
+                var psi = new ProcessStartInfo("cmd.exe", "/c npm root -g");
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                using (Process p = Process.Start(psi))
+                {
+                    if (!p.WaitForExit(5000)) { try { p.Kill(); } catch { } return null; }
+                    string outp = p.StandardOutput.ReadToEnd();
+                    return string.IsNullOrEmpty(outp) ? null : outp.Trim();
+                }
+            }
+            catch { return null; }
         }
 
         /// <summary>解析 DSH_HOME：配置 > 环境变量 > %USERPROFILE%\.dsh</summary>

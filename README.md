@@ -102,7 +102,7 @@ build.cmd
 
 - **托盘图标不见了？** 点击任务栏右下角「^」展开隐藏图标，将 DSH Web 图标拖到可见区即可。
 - **启动失败或超时？** 右键托盘图标 → 打开日志文件，查看 `[dsh]` / `[dsh!]` 开头的行；常见原因是端口被占用、路径配置错误或首次启动较慢（首次加载较耗时，可调大 `startTimeoutSeconds`）。
-- **找不到 node / dsh？** 在 `config.json` 中显式配置 `nodePath` 与 `dshBinPath`。
+- **找不到 node / dsh？** 优先在 `config.json` 中显式配置 `nodePath` 与 `dshBinPath`；未配置时自动探测：node 从 PATH 与常见安装位置查找，dsh 从 node 所在目录的 `node_global\node_modules`、`npm root -g` 结果及常见默认位置查找。
 - **修改端口后旧端口仍被占用？** 先右键退出工具，确认旧的 dsh 进程已结束（可在任务管理器中检查 node 进程）后再启动。
 
 ## 开源许可
