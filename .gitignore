@@ -3,6 +3,9 @@ dsh-web-launcher.exe
 # 旧版本残留（运行中实例仍在占用，退出工具后可手动删除）
 dsh-web-launcher.old.exe
 
+# 打包产物（package.cmd 生成）
+dist/
+
 # 运行日志（自动生成）
 dsh-web.log
 

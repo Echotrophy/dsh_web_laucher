@@ -6,7 +6,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 
 ## 功能特性
 
-- **一键启动**：双击 exe 即以隐藏窗口方式拉起 `dsh web`，无控制台窗口残留
+- **一键启动**：双击 exe 即以隐藏窗口方式拉起 `dsh web`，无控制台窗口残留；程序完全后台运行，不会出现于 Alt+Tab 切换与任务管理器
 - **就绪探测**：轮询端口等待服务就绪，就绪后气泡提示并自动打开默认浏览器
 - **托盘状态图标**：🟡 启动中 / 🟢 运行中 / 🔴 异常 / ⚪ 已停止
 - **右键菜单**：打开界面、重新启动服务、打开日志文件、退出（停止服务）
@@ -54,7 +54,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 
 ## 配置文件
 
-程序读取 **exe 同目录**下的 `config.json`（不强制存在，缺省时使用默认值并自动探测路径）。**仅下载 exe 使用的用户**：从仓库或 Release 附件获取 `config.example.json` 模板，放到 exe 同目录并改名为 `config.json` 即可；也可以手动新建，只需写入想修改的字段，未填字段自动用默认值。仓库不提交个人 `config.json`。
+程序读取 **exe 同目录**下的 `config.json`（不强制存在，缺省时使用默认值并自动探测路径）。**仅下载 exe 使用的用户**：从仓库获取 `config.example.json` 模板，或下载 Release 中的配置版 zip（内含 `config.json`）；放到 exe 同目录即可，也可以手动新建，只需写入想修改的字段，未填字段自动用默认值。仓库不提交个人 `config.json`。
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -81,12 +81,21 @@ build.cmd
 
 双击 `build.cmd` 或在命令行执行即可，成功后在当前目录生成 `dsh-web-launcher.exe`。
 
+发布时可使用 `package.cmd` 一键生成 Release 附件（单 exe + 配置版 zip）：
+
+```bat
+package.cmd 1.0.3
+```
+
+产物位于 `dist\` 目录（`dsh-web-launcher.exe` 与 `dsh-web-launcher-v1.0.3-config.zip`）。
+
 ## 文件结构
 
 | 文件 | 说明 |
 |---|---|
 | `dsh-web-launcher.cs` | 全部源码（C# 5 语法，注释完整，目标框架 .NET Framework 4.x） |
 | `build.cmd` | 一键编译脚本（零依赖） |
+| `package.cmd` | 发布打包脚本：一键生成单 exe + 配置版 zip |
 | `config.example.json` | 配置文件模板 |
 | `DeepSeekHarness-WhaleGirl.ico` | 应用图标（编译时通过 `build.cmd` 嵌入 exe） |
 
@@ -104,6 +113,13 @@ build.cmd
 - **启动失败或超时？** 右键托盘图标 → 打开日志文件，查看 `[dsh]` / `[dsh!]` 开头的行；常见原因是端口被占用、路径配置错误或首次启动较慢（首次加载较耗时，可调大 `startTimeoutSeconds`）。
 - **找不到 node / dsh？** 优先在 `config.json` 中显式配置 `nodePath` 与 `dshBinPath`；未配置时自动探测：node 从 PATH 与常见安装位置查找，dsh 从 node 所在目录的 `node_global\node_modules`、`npm root -g` 结果及常见默认位置查找。
 - **修改端口后旧端口仍被占用？** 先右键退出工具，确认旧的 dsh 进程已结束（可在任务管理器中检查 node 进程）后再启动。
+
+## 更新记录
+
+- **v1.0.3** — 修复 Alt+Tab / 任务管理器出现「无标题幽灵窗口」的问题（工具窗口样式 + 窗体永不显示）；新增 `package.cmd` 一键打包脚本
+- **v1.0.2** — 日志默认写入 `%LOCALAPPDATA%\dsh-web-launcher\`，不再落在 exe 同目录（如桌面）
+- **v1.0.1** — 增强 dsh 入口自动探测（node 目录推导 / `npm root -g` / 常见位置），直接下载 exe 也能自动定位 dsh
+- **v1.0.0** — 首个版本
 
 ## 开源许可
 

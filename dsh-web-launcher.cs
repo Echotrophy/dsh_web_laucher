@@ -341,6 +341,24 @@ namespace DSHWebLauncher
 
         protected override bool ShowWithoutActivation { get { return true; } }
 
+        // 工具窗口样式（WS_EX_TOOLWINDOW）：不出现于 Alt+Tab 切换、任务栏与任务管理器的应用列表
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x00000080;
+                return cp;
+            }
+        }
+
+        // 窗体永不显示：仅作为托盘图标与消息循环的宿主（防止 Alt+Tab / 任务管理器出现幽灵窗口）
+        protected override void SetVisibleCore(bool value)
+        {
+            if (!this.IsHandleCreated) this.CreateControl();
+            base.SetVisibleCore(false);
+        }
+
         private void OnSessionEnding(object sender, SessionEndingEventArgs e)
         {
             Cleanup();
