@@ -88,7 +88,7 @@ build.cmd
 | `dsh-web-launcher.cs` | 全部源码（C# 5 语法，注释完整，目标框架 .NET Framework 4.x） |
 | `build.cmd` | 一键编译脚本（零依赖） |
 | `config.example.json` | 配置文件模板 |
-| `DeepSeekHarness-WhaleGirl.ico` | 应用图标素材 |
+| `DeepSeekHarness-WhaleGirl.ico` | 应用图标（编译时通过 `build.cmd` 嵌入 exe） |
 
 以下文件为运行产物或本机个人文件，不纳入版本控制（见 `.gitignore`）：
 

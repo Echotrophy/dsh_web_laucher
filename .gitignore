@@ -1,5 +1,7 @@
 # 编译产物（用 build.cmd 生成，可通过 GitHub Releases 发布）
 dsh-web-launcher.exe
+# 旧版本残留（运行中实例仍在占用，退出工具后可手动删除）
+dsh-web-launcher.old.exe
 
 # 运行日志（自动生成）
 dsh-web.log

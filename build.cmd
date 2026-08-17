@@ -19,6 +19,7 @@ if not defined CSC (
 
 echo [INFO] 使用编译器: %CSC%
 "%CSC%" /nologo /target:winexe /optimize+ /out:dsh-web-launcher.exe ^
+    /win32icon:DeepSeekHarness-WhaleGirl.ico ^
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll ^
     dsh-web-launcher.cs
 
