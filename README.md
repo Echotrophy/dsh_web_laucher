@@ -24,7 +24,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 | Node.js | 已安装并可通过命令行调用（含 npm） |
 | dsh | 已通过 npm 全局安装：`npm install -g @deepseek-ai/dsh` |
 
-无其他依赖。编译工具链同样只需 Windows 自带的 .NET Framework `csc.exe`。
+无其他依赖；编译工具链同样只需 Windows 自带的 .NET Framework `csc.exe`。
 
 ## 快速开始
 
