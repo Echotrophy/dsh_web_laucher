@@ -11,3 +11,6 @@ dsh-web.log
 
 # 本机个人配置（含本机绝对路径，勿提交；仓库提供 config.example.json 模板）
 config.json
+
+# vscode配置
+.vs/
