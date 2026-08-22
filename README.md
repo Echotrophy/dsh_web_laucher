@@ -9,12 +9,13 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 - **一键启动**：双击 exe 即以隐藏窗口方式拉起 `dsh web`，无控制台窗口残留；程序完全后台运行，不会出现于 Alt+Tab 切换与任务管理器
 - **就绪探测**：轮询端口等待服务就绪，就绪后气泡提示并自动打开默认浏览器
 - **托盘状态图标**：🟡 启动中 / 🟢 运行中 / 🔴 异常 / ⚪ 已停止
-- **右键菜单**：打开界面、重新启动服务、打开日志文件、退出（停止服务）
+- **右键菜单**：打开界面、重新启动服务、设置、打开日志文件、退出（停止服务）
 - **单实例保护**：重复双击不会重复启动服务，只打开界面
 - **智能接管**：若端口已被 node/dsh 进程占用则直接接管（退出时一并停止）；若被其他程序占用则不接管，避免误杀
 - **进程清理**：退出/重启时先结束自己拉起的进程树，再按端口清扫残留监听进程，不留孤儿进程
 - **健康巡检**：后台定时检查服务状态，服务挂掉时托盘自动变红
-- **高度可配置**：端口、超时、node/dsh 路径、DSH_HOME、附加参数等均可通过 `config.json` 调整
+- **内置设置窗口**：托盘右键「设置…」即可修改端口、超时、路径等参数，设置自动保存到 `%LOCALAPPDATA%\dsh-web-launcher\`，exe 目录保持整洁
+- **高度可配置**：端口、超时、node/dsh 路径、DSH_HOME、附加参数等均可通过设置窗口或 `config.json` 调整
 
 ## 环境要求
 
@@ -47,6 +48,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 
 - **打开界面** — 在默认浏览器打开 `http://127.0.0.1:3080`
 - **重新启动服务** — 杀掉当前 dsh 进程并重新拉起（用于卡死/异常恢复）
+- **设置…** — 打开设置窗口，修改端口、超时、路径等参数，保存后可选立即重启生效（设置存放在 `%LOCALAPPDATA%\dsh-web-launcher\`，不占用 exe 目录）
 - **打开日志文件** — 查看 `dsh-web.log`（默认在 `%LOCALAPPDATA%\dsh-web-launcher\`，dsh 的 stdout/stderr 也会写入该文件，便于排障）
 - **退出（停止服务）** — 结束 dsh 进程树并退出工具
 
@@ -54,7 +56,7 @@ Windows 系统托盘小工具，用于一键启动 **DeepSeek Harness Web**（`d
 
 ## 配置文件
 
-程序读取 **exe 同目录**下的 `config.json`（不强制存在，缺省时使用默认值并自动探测路径）。**仅下载 exe 使用的用户**：从仓库获取 `config.example.json` 模板，或下载 Release 中的配置版 zip（内含 `config.json`）；放到 exe 同目录即可，也可以手动新建，只需写入想修改的字段，未填字段自动用默认值。仓库不提交个人 `config.json`。
+配置读取优先级：**① exe 同目录 `config.json`（手动放置，便携优先）→ ② `%LOCALAPPDATA%\dsh-web-launcher\config.json`（设置窗口保存）→ ③ 默认值**。**绝大多数用户无需手动编辑配置文件**：托盘右键「设置…」即可修改端口、超时、路径等参数，设置自动保存到 `%LOCALAPPDATA%\dsh-web-launcher\`，不会在 exe 目录产生任何文件；高级用户仍可把 `config.json` 放在 exe 同目录手动编辑（优先级更高），只需写入想修改的字段，未填字段自动用默认值。仓库不提交个人 `config.json`。
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -81,13 +83,13 @@ build.cmd
 
 双击 `build.cmd` 或在命令行执行即可，成功后在当前目录生成 `dsh-web-launcher.exe`。
 
-发布时可使用 `package.cmd` 一键生成 Release 附件（单 exe + 配置版 zip）：
+发布时可使用 `package.cmd` 一键生成 Release 附件：
 
 ```bat
-package.cmd 1.0.3
+package.cmd
 ```
 
-产物位于 `dist\` 目录（`dsh-web-launcher.exe` 与 `dsh-web-launcher-v1.0.3-config.zip`）。
+产物位于 `dist\` 目录（`dsh-web-launcher.exe`，单文件）。
 
 ## 文件结构
 
@@ -95,7 +97,7 @@ package.cmd 1.0.3
 |---|---|
 | `dsh-web-launcher.cs` | 全部源码（C# 5 语法，注释完整，目标框架 .NET Framework 4.x） |
 | `build.cmd` | 一键编译脚本（零依赖） |
-| `package.cmd` | 发布打包脚本：一键生成单 exe + 配置版 zip |
+| `package.cmd` | 发布打包脚本：一键生成发布用 exe |
 | `config.example.json` | 配置文件模板 |
 | `DeepSeekHarness-WhaleGirl.ico` | 应用图标（编译时通过 `build.cmd` 嵌入 exe） |
 
@@ -116,6 +118,7 @@ package.cmd 1.0.3
 
 ## 更新记录
 
+- **v1.0.4** — 新增托盘右键「设置…」内置设置窗口，可修改端口、超时、路径等参数；设置保存到 `%LOCALAPPDATA%\dsh-web-launcher\config.json`，exe 目录保持整洁；发布包仅提供单 exe（设置功能已覆盖原配置版用途）
 - **v1.0.3** — 修复 Alt+Tab / 任务管理器出现「无标题幽灵窗口」的问题（工具窗口样式 + 窗体永不显示）；新增 `package.cmd` 一键打包脚本
 - **v1.0.2** — 日志默认写入 `%LOCALAPPDATA%\dsh-web-launcher\`，不再落在 exe 同目录（如桌面）
 - **v1.0.1** — 增强 dsh 入口自动探测（node 目录推导 / `npm root -g` / 常见位置），直接下载 exe 也能自动定位 dsh

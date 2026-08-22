@@ -1,9 +1,9 @@
 @echo off
 rem ============================================================
-rem  dsh-web-launcher 一键编译脚本
-rem  使用 Windows 自带的 .NET Framework csc.exe，无需安装任何东西
-rem  用法：双击 build.cmd（或在本目录命令行执行 build.cmd）
-rem        传参 nopause 时不暂停（供 package.cmd 调用）：build.cmd nopause
+rem  dsh-web-launcher build script
+rem  Uses the built-in .NET Framework csc.exe - no install needed
+rem  Usage: double-click build.cmd, or run "build.cmd nopause"
+rem  (pass nopause to skip the pause prompt, used by package.cmd)
 rem ============================================================
 setlocal
 cd /d "%~dp0"
@@ -13,22 +13,22 @@ if exist "%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe" set "CSC=%WINDI
 if not defined CSC if exist "%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe" set "CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 
 if not defined CSC (
-    echo [ERROR] 未找到 .NET Framework 4.x 的 csc.exe，无法编译。
+    echo [ERROR] csc.exe not found ^(requires .NET Framework 4.x^).
     if /i not "%~1"=="nopause" pause
     exit /b 1
 )
 
-echo [INFO] 使用编译器: %CSC%
+echo [INFO] Compiler: %CSC%
 "%CSC%" /nologo /target:winexe /optimize+ /out:dsh-web-launcher.exe ^
     /win32icon:DeepSeekHarness-WhaleGirl.ico ^
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll ^
     dsh-web-launcher.cs
 
 if errorlevel 1 (
-    echo [ERROR] 编译失败，请检查上面的错误信息。
+    echo [ERROR] Build failed - see messages above.
     if /i not "%~1"=="nopause" pause
     exit /b 1
 )
 
-echo [OK] 已生成 dsh-web-launcher.exe，双击即可运行。
+echo [OK] dsh-web-launcher.exe generated - double-click to run.
 if /i not "%~1"=="nopause" pause

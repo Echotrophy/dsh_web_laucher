@@ -10,7 +10,7 @@
 //    3. 否则以隐藏窗口方式启动 dsh web（node ...\@deepseek-ai\dsh\lib\bin.js web）
 //    4. 轮询端口，就绪后托盘气泡提示 + 自动打开默认浏览器
 //    5. 托盘图标常驻：黄色=启动中 / 绿色=运行中 / 红色=异常 / 灰色=已停止
-//       右键菜单：打开界面 / 重新启动服务 / 打开日志文件 / 退出（停止服务）
+//       右键菜单：打开界面 / 重新启动服务 / 设置… / 打开日志文件 / 退出（停止服务）
 //    6. 单实例保护（重复双击只打开浏览器）；后台定时巡检，服务挂掉托盘变红
 //    7. 退出/重启时：先杀自己拉起的进程树，再按端口清扫残留的 node 监听进程
 //       （即使进程关系失联，也能停掉真正占用端口的 dsh 服务）
@@ -18,7 +18,7 @@
 //  编译（Windows 自带 .NET Framework 的 csc.exe，无需安装任何东西）：
 //      build.cmd
 //
-//  配置文件：同目录 config.json（可自定义端口、是否自动开浏览器、超时、路径等）
+//  配置文件：优先 exe 同目录 config.json，其次 %LOCALAPPDATA%\dsh-web-launcher\config.json（可在托盘「设置…」中修改）
 //  日志文件：默认 %LOCALAPPDATA%\dsh-web-launcher\dsh-web.log（config.json 的 logFile 可自定义）
 //
 //  目标框架：.NET Framework 4.x（C# 5 语法，兼容旧版 csc）
@@ -106,29 +106,47 @@ namespace DSHWebLauncher
 
         public string Url { get { return "http://" + Host + ":" + Port; } }
 
+        /// <summary>当前配置的来源文件（设置保存时写回同一文件；无则保存到 %LOCALAPPDATA%\dsh-web-launcher\config.json）</summary>
+        private string _sourcePath;
+
+        /// <summary>读取配置：优先 exe 同目录 config.json（便携手动配置），其次 %LOCALAPPDATA%\dsh-web-launcher\config.json（设置窗口保存），否则使用默认值</summary>
         public static Config Load()
         {
             Config c = new Config();
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-            if (!File.Exists(path)) return c;
+            string exeCfg = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            if (File.Exists(exeCfg)) { c.ApplyJson(exeCfg); c._sourcePath = exeCfg; return c; }
+            string appCfg = Path.Combine(AppDataConfigDir(), "config.json");
+            if (File.Exists(appCfg)) { c.ApplyJson(appCfg); c._sourcePath = appCfg; return c; }
+            return c;
+        }
 
+        private static string AppDataConfigDir()
+        {
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return string.IsNullOrEmpty(local)
+                ? AppDomain.CurrentDomain.BaseDirectory
+                : Path.Combine(local, "dsh-web-launcher");
+        }
+
+        private void ApplyJson(string path)
+        {
             try
             {
                 string json = File.ReadAllText(path);
                 var ser = new JavaScriptSerializer();
                 var map = ser.Deserialize<Dictionary<string, object>>(json);
-                if (map == null) return c;
+                if (map == null) return;
 
                 object v;
-                if (map.TryGetValue("host", out v) && v != null && Convert.ToString(v).Length > 0) c.Host = Convert.ToString(v);
-                if (map.TryGetValue("port", out v) && v != null) c.Port = Convert.ToInt32(v);
-                if (map.TryGetValue("autoOpenBrowser", out v) && v != null) c.AutoOpenBrowser = Convert.ToBoolean(v);
-                if (map.TryGetValue("startTimeoutSeconds", out v) && v != null) c.StartTimeoutSeconds = Convert.ToInt32(v);
-                if (map.TryGetValue("pollIntervalMs", out v) && v != null) c.PollIntervalMs = Convert.ToInt32(v);
-                if (map.TryGetValue("nodePath", out v) && v != null && Convert.ToString(v).Length > 0) c.NodePath = Convert.ToString(v);
-                if (map.TryGetValue("dshBinPath", out v) && v != null && Convert.ToString(v).Length > 0) c.DshBinPath = Convert.ToString(v);
-                if (map.TryGetValue("dshHome", out v) && v != null && Convert.ToString(v).Length > 0) c.DshHome = Convert.ToString(v);
-                if (map.TryGetValue("logFile", out v) && v != null && Convert.ToString(v).Length > 0) c.LogFile = Convert.ToString(v);
+                if (map.TryGetValue("host", out v) && v != null && Convert.ToString(v).Length > 0) Host = Convert.ToString(v);
+                if (map.TryGetValue("port", out v) && v != null) Port = Convert.ToInt32(v);
+                if (map.TryGetValue("autoOpenBrowser", out v) && v != null) AutoOpenBrowser = Convert.ToBoolean(v);
+                if (map.TryGetValue("startTimeoutSeconds", out v) && v != null) StartTimeoutSeconds = Convert.ToInt32(v);
+                if (map.TryGetValue("pollIntervalMs", out v) && v != null) PollIntervalMs = Convert.ToInt32(v);
+                if (map.TryGetValue("nodePath", out v) && v != null && Convert.ToString(v).Length > 0) NodePath = Convert.ToString(v);
+                if (map.TryGetValue("dshBinPath", out v) && v != null && Convert.ToString(v).Length > 0) DshBinPath = Convert.ToString(v);
+                if (map.TryGetValue("dshHome", out v) && v != null && Convert.ToString(v).Length > 0) DshHome = Convert.ToString(v);
+                if (map.TryGetValue("logFile", out v) && v != null && Convert.ToString(v).Length > 0) LogFile = Convert.ToString(v);
                 if (map.TryGetValue("extraArgs", out v) && v != null)
                 {
                     var list = new List<string>();
@@ -141,14 +159,13 @@ namespace DSHWebLauncher
                     {
                         foreach (object o in (object[])v) if (o != null) list.Add(Convert.ToString(o));
                     }
-                    c.ExtraArgs = list.ToArray();
+                    ExtraArgs = list.ToArray();
                 }
             }
             catch (Exception ex)
             {
-                Log.Write("读取 config.json 失败，使用默认配置: " + ex.Message);
+                Log.Write("读取 " + path + " 失败，使用默认配置: " + ex.Message);
             }
-            return c;
         }
 
         /// <summary>解析 node.exe 路径：配置 > PATH > 常见安装位置</summary>
@@ -267,6 +284,50 @@ namespace DSHWebLauncher
             catch { dir = AppDomain.CurrentDomain.BaseDirectory; }
             return Path.Combine(dir, LogFile);
         }
+
+        /// <summary>把当前配置写回来源文件；无来源时保存到 %LOCALAPPDATA%\dsh-web-launcher\config.json（保持 exe 目录整洁）</summary>
+        public bool Save()
+        {
+            try
+            {
+                string dir = _sourcePath != null ? Path.GetDirectoryName(_sourcePath) : AppDataConfigDir();
+                string path = _sourcePath ?? Path.Combine(dir, "config.json");
+                Directory.CreateDirectory(dir);
+                var sb = new StringBuilder();
+                sb.AppendLine("{");
+                sb.Append("  \"host\": ").Append(JsonStr(Host)).AppendLine(",");
+                sb.Append("  \"port\": ").Append(Port).AppendLine(",");
+                sb.Append("  \"autoOpenBrowser\": ").Append(AutoOpenBrowser ? "true" : "false").AppendLine(",");
+                sb.Append("  \"startTimeoutSeconds\": ").Append(StartTimeoutSeconds).AppendLine(",");
+                sb.Append("  \"pollIntervalMs\": ").Append(PollIntervalMs).AppendLine(",");
+                sb.Append("  \"nodePath\": ").Append(JsonStr(NodePath)).AppendLine(",");
+                sb.Append("  \"dshBinPath\": ").Append(JsonStr(DshBinPath)).AppendLine(",");
+                sb.Append("  \"dshHome\": ").Append(JsonStr(DshHome)).AppendLine(",");
+                sb.Append("  \"logFile\": ").Append(JsonStr(LogFile)).AppendLine(",");
+                sb.Append("  \"extraArgs\": [");
+                for (int i = 0; i < ExtraArgs.Length; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    sb.Append(JsonStr(ExtraArgs[i]));
+                }
+                sb.AppendLine("]");
+                sb.AppendLine("}");
+                File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+                _sourcePath = path;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("保存 config.json 失败: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>JSON 字符串转义（借助 JavaScriptSerializer 生成带引号的合法 JSON 字符串）</summary>
+        private static string JsonStr(string s)
+        {
+            return new JavaScriptSerializer().Serialize(s ?? "");
+        }
     }
 
     // ------------------------------------------------------------------ 日志
@@ -309,6 +370,7 @@ namespace DSHWebLauncher
         private Config _cfg;
         private NotifyIcon _tray;
         private ToolStripMenuItem _miExit;
+        private ToolStripMenuItem _miOpenUrl;
         private System.Windows.Forms.Timer _pollTimer;
         private System.Windows.Forms.Timer _healthTimer;
         private Process _proc;
@@ -373,16 +435,19 @@ namespace DSHWebLauncher
             _iconStopped = MakeCircleIcon(Color.Gray, Color.FromArgb(60, 60, 60));
 
             var menu = new ContextMenuStrip();
-            var miOpen = new ToolStripMenuItem("打开界面 (" + _cfg.Url + ")");
-            miOpen.Click += delegate { Program.OpenBrowser(_cfg.Url); };
+            _miOpenUrl = new ToolStripMenuItem("打开界面 (" + _cfg.Url + ")");
+            _miOpenUrl.Click += delegate { Program.OpenBrowser(_cfg.Url); };
             var miRestart = new ToolStripMenuItem("重新启动服务");
             miRestart.Click += delegate { RestartServer(); };
+            var miSettings = new ToolStripMenuItem("设置…");
+            miSettings.Click += delegate { OpenSettings(); };
             var miLog = new ToolStripMenuItem("打开日志文件");
             miLog.Click += delegate { TryOpenLog(); };
             _miExit = new ToolStripMenuItem("退出（停止服务）");
             _miExit.Click += delegate { ExitApplication(); };
-            menu.Items.Add(miOpen);
+            menu.Items.Add(_miOpenUrl);
             menu.Items.Add(miRestart);
+            menu.Items.Add(miSettings);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miLog);
             menu.Items.Add(new ToolStripSeparator());
@@ -626,6 +691,26 @@ namespace DSHWebLauncher
         }
 
         // ------------------------------------------------------------ 重启 / 退出
+        private void OpenSettings()
+        {
+            using (var dlg = new SettingsDialog(_cfg))
+            {
+                // 主窗体隐藏，不传 owner 避免焦点/层级问题
+                if (dlg.ShowDialog() != DialogResult.OK) return;
+            }
+            if (!_cfg.Save())
+            {
+                MessageBox.Show("保存 config.json 失败，请确认 exe 所在目录可写。", "dsh-web-launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (_miOpenUrl != null) _miOpenUrl.Text = "打开界面 (" + _cfg.Url + ")";
+            Log.Write("设置已保存: " + _cfg.Url);
+            if (MessageBox.Show("设置已保存。\n是否立即重启服务以生效？", "dsh-web-launcher", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                RestartServer();
+            }
+        }
+
         private void RestartServer()
         {
             Log.Write("手动重启服务…");
@@ -898,6 +983,131 @@ namespace DSHWebLauncher
             try { SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
             Cleanup();
             base.OnFormClosed(e);
+        }
+    }
+
+    // ------------------------------------------------------------------ 设置窗口
+    internal sealed class SettingsDialog : Form
+    {
+        private readonly Config _cfg;
+        private TextBox _txtHost, _txtPort, _txtTimeout, _txtPoll, _txtNode, _txtBin, _txtHome, _txtExtra;
+        private CheckBox _chkAutoOpen;
+
+        public SettingsDialog(Config cfg)
+        {
+            _cfg = cfg;
+
+            Text = "dsh-web-launcher 设置";
+            Font = SystemFonts.MessageBoxFont;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(500, 372);
+
+            const int xLabel = 16, xInput = 180, wInput = 300;
+            int y = 14;
+            AddLabel("监听地址 host", xLabel, y);
+            _txtHost = AddText(cfg.Host, xInput, y, wInput);
+            y += 32;
+            AddLabel("端口 port", xLabel, y);
+            _txtPort = AddText(cfg.Port.ToString(), xInput, y, wInput);
+            y += 32;
+            AddLabel("自动打开浏览器", xLabel, y);
+            _chkAutoOpen = new CheckBox { Checked = cfg.AutoOpenBrowser, Location = new Point(xInput, y) };
+            Controls.Add(_chkAutoOpen);
+            y += 32;
+            AddLabel("等待就绪超时（秒）", xLabel, y);
+            _txtTimeout = AddText(cfg.StartTimeoutSeconds.ToString(), xInput, y, wInput);
+            y += 32;
+            AddLabel("就绪探测间隔（毫秒）", xLabel, y);
+            _txtPoll = AddText(cfg.PollIntervalMs.ToString(), xInput, y, wInput);
+            y += 32;
+            AddLabel("node.exe 路径", xLabel, y);
+            _txtNode = AddText(cfg.NodePath, xInput, y, wInput);
+            y += 32;
+            AddLabel("dsh 入口 bin.js 路径", xLabel, y);
+            _txtBin = AddText(cfg.DshBinPath, xInput, y, wInput);
+            y += 32;
+            AddLabel("DSH_HOME", xLabel, y);
+            _txtHome = AddText(cfg.DshHome, xInput, y, wInput);
+            y += 32;
+            AddLabel("附加参数（空格分隔）", xLabel, y);
+            _txtExtra = AddText(string.Join(" ", cfg.ExtraArgs), xInput, y, wInput);
+            y += 40;
+
+            Controls.Add(new Label
+            {
+                Text = "提示：路径留空会自动探测；设置保存在 %LOCALAPPDATA%\\dsh-web-launcher\\config.json，不占用 exe 目录。",
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText,
+                Location = new Point(xLabel, y)
+            });
+
+            var btnOk = new Button { Text = "保存", Width = 88, Height = 28, Location = new Point(500 - 16 - 88 - 8 - 88, 372 - 44) };
+            var btnCancel = new Button { Text = "取消", Width = 88, Height = 28, Location = new Point(500 - 16 - 88, 372 - 44) };
+            btnOk.Click += delegate { if (TryApply()) { DialogResult = DialogResult.OK; Close(); } };
+            btnCancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(btnOk);
+            Controls.Add(btnCancel);
+            AcceptButton = btnOk;
+            CancelButton = btnCancel;
+        }
+
+        private void AddLabel(string text, int x, int y)
+        {
+            Controls.Add(new Label { Text = text, AutoSize = true, Location = new Point(x, y + 4) });
+        }
+
+        private TextBox AddText(string value, int x, int y, int width)
+        {
+            var tb = new TextBox { Text = value, Location = new Point(x, y), Width = width };
+            Controls.Add(tb);
+            return tb;
+        }
+
+        /// <summary>校验并写回配置；全部合法返回 true</summary>
+        private bool TryApply()
+        {
+            string host = _txtHost.Text.Trim();
+            int port, timeout, poll;
+            if (host.Length == 0)
+            {
+                MessageBox.Show("监听地址不能为空。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (!int.TryParse(_txtPort.Text.Trim(), out port) || port < 1 || port > 65535)
+            {
+                MessageBox.Show("端口需为 1-65535 的整数。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (!int.TryParse(_txtTimeout.Text.Trim(), out timeout) || timeout < 1)
+            {
+                MessageBox.Show("等待超时需为正整数（秒）。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (!int.TryParse(_txtPoll.Text.Trim(), out poll) || poll < 1)
+            {
+                MessageBox.Show("探测间隔需为正整数（毫秒）。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            _cfg.Host = host;
+            _cfg.Port = port;
+            _cfg.AutoOpenBrowser = _chkAutoOpen.Checked;
+            _cfg.StartTimeoutSeconds = timeout;
+            _cfg.PollIntervalMs = poll;
+            _cfg.NodePath = _txtNode.Text.Trim();
+            _cfg.DshBinPath = _txtBin.Text.Trim();
+            _cfg.DshHome = _txtHome.Text.Trim();
+            _cfg.ExtraArgs = SplitArgs(_txtExtra.Text);
+            return true;
+        }
+
+        private static string[] SplitArgs(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return new string[0];
+            return s.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
         }
     }
 }
