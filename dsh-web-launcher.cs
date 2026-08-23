@@ -80,8 +80,38 @@ namespace DSHWebLauncher
         {
             try
             {
+                // 跨进程去重：10 秒内已打开过浏览器则跳过
+                // （双击/并发实例可能同时触发两次打开，如"已有实例"路径与就绪/接管路径各开一次）
+                string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string stamp = string.IsNullOrEmpty(local) ? null : Path.Combine(local, "dsh-web-launcher", "browser-open.stamp");
+                if (stamp != null)
+                {
+                    try
+                    {
+                        string dir = Path.GetDirectoryName(stamp);
+                        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                        if (File.Exists(stamp))
+                        {
+                            DateTime last;
+                            if (DateTime.TryParse(File.ReadAllText(stamp), out last)
+                                && (DateTime.Now - last).TotalSeconds < 10)
+                            {
+                                Log.Write("10 秒内已打开过浏览器，跳过重复打开: " + url);
+                                return;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
                 Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                 Log.Write("已在默认浏览器打开: " + url);
+
+                if (stamp != null)
+                {
+                    try { File.WriteAllText(stamp, DateTime.Now.ToString("o")); }
+                    catch { }
+                }
             }
             catch (Exception ex)
             {
