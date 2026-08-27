@@ -575,7 +575,8 @@ namespace DSHWebLauncher
                 }
 
                 StringBuilder args = new StringBuilder();
-                args.Append(Quote(bin)).Append(" web");
+                // --no-open：dsh web 自身也会自动打开默认浏览器，这里禁用，由启动器统一控制（受 autoOpenBrowser 配置）
+                args.Append(Quote(bin)).Append(" web --no-open");
                 if (_cfg.Port != 3080) args.Append(" --port ").Append(_cfg.Port);
                 if (_cfg.Host != "127.0.0.1") args.Append(" --host ").Append(_cfg.Host);
                 foreach (string a in _cfg.ExtraArgs) args.Append(" ").Append(Quote(a));
